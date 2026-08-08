@@ -36,6 +36,7 @@
          consumers that use Eda types directly must therefore reference them explicitly. -->
     <ProjectReference Include="..\..\shared\OriginalCircuit.Eda.Abstractions\src\OriginalCircuit.Eda.Abstractions\OriginalCircuit.Eda.Abstractions.csproj" />
     <ProjectReference Include="..\..\shared\OriginalCircuit.Eda.Rendering\src\OriginalCircuit.Eda.Rendering.Core\OriginalCircuit.Eda.Rendering.Core.csproj" />
+    <ProjectReference Include="..\..\shared\OriginalCircuit.Mech.GLTF\src\OriginalCircuit.Mech.GLTF\OriginalCircuit.Mech.GLTF.csproj" />
   </ItemGroup>
 
   <ItemGroup>

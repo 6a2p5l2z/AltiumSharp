@@ -6,7 +6,7 @@
 	url = https://github.com/issus/OriginalCircuit.Eda.Rendering.git
 [submodule "shared/OriginalCircuit.Mech.STEP"]
 	path = shared/OriginalCircuit.Mech.STEP
-	url = https://github.com/issus/OriginalCircuit.Mech.STEP.git
+	url = https://github.com/6a2p5l2z/OriginalCircuit.Mech.STEP.git
 [submodule "shared/OriginalCircuit.Mech.GLTF"]
 	path = shared/OriginalCircuit.Mech.GLTF
 	url = https://github.com/issus/OriginalCircuit.Mech.GLTF.git

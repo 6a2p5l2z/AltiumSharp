@@ -13,10 +13,9 @@ namespace OriginalCircuit.Altium.Rendering.Gltf;
 /// <summary>
 /// Places each component's embedded 3D STEP body onto the board. The model is parsed and tessellated
 /// once per unique model id (cached, with its per-face STEP colours preserved), then each placement
-/// is transformed into board space — the model's canonical orientation (PcbModel rotation/Dz), the
-/// body's 3D rotation, the footprint 2D rotation, the board XY location and the standoff height — and
-/// emitted as its own toggleable node under a single "Components" node. Bottom-side bodies are
-/// mirrored under the board.
+/// is transformed into board space using the body's absolute 3D pose, footprint 2D rotation, board
+/// XY location and standoff height. The signed body-height envelope identifies whether that pose is
+/// already top- or bottom-facing; it is mirrored only when it disagrees with the component side.
 /// </summary>
 internal sealed class GltfComponentPlacer(
     PcbDocument doc,
@@ -82,8 +81,10 @@ internal sealed class GltfComponentPlacer(
     private (int Mesh, string Name, JsonObject Extras)? EmitBody(PcbComponentBody body, CanonicalMesh canonical, double boardTopZ, double boardBottomZ)
     {
         bool bottom = IsBottomSide(body);
+        bool mirrorZ = NeedsBoardPlaneMirror(body, bottom);
 
-        // Footprint + 3D placement rotations (degrees), applied after the model's canonical pose.
+        // The body's 3D rotation is the absolute STEP pose and already includes its model-axis
+        // correction. The footprint rotation is the remaining board-plane rotation.
         double rx = body.Model3DRotX, ry = body.Model3DRotY, rz = body.Model3DRotZ + body.Model2DRotation;
         double tx = body.Model2DLocation.X.ToMm() - centerXMm;
         double ty = body.Model2DLocation.Y.ToMm() - centerYMm;
@@ -97,14 +98,14 @@ internal sealed class GltfComponentPlacer(
         foreach (var p in canonical.Positions)
         {
             var (x, y, z) = Rotate(p.X, p.Y, p.Z, rx, ry, rz);
-            // A bottom-side part is flipped under the board: mirror Z and hang below the bottom face.
-            double wz = bottom ? boardBottomZ - standoff - z : boardTopZ + standoff + z;
+            double boardZ = bottom ? boardBottomZ : boardTopZ;
+            double wz = mirrorZ ? boardZ - standoff - z : boardZ + standoff + z;
             positions.Add(new Vector3((float)(x + tx), (float)(y + ty), (float)wz));
         }
         foreach (var n in canonical.Normals)
         {
             var (x, y, z) = Rotate(n.X, n.Y, n.Z, rx, ry, rz);
-            if (bottom) z = -z; // match the Z mirror so normals keep facing outward
+            if (mirrorZ) z = -z;
             var v = new Vector3((float)x, (float)y, (float)z);
             normals.Add(v.LengthSquared() > 1e-12f ? Vector3.Normalize(v) : new Vector3(0, 0, 1));
         }
@@ -115,8 +116,7 @@ internal sealed class GltfComponentPlacer(
         {
             if (g.Indices.Count == 0) continue;
             int offset = indices.Count;
-            // A Z mirror flips winding; reverse each triangle so front faces stay front.
-            if (bottom)
+            if (mirrorZ)
                 for (int i = 0; i < g.Indices.Count; i += 3) { indices.Add(g.Indices[i]); indices.Add(g.Indices[i + 2]); indices.Add(g.Indices[i + 1]); }
             else
                 indices.AddRange(g.Indices);
@@ -141,7 +141,7 @@ internal sealed class GltfComponentPlacer(
         return idx;
     }
 
-    // Tessellates the model once and bakes its canonical orientation (PcbModel rotation + Dz),
+    // Tessellates the model once in its native frame, retaining STEP assembly transforms and
     // grouping triangles by their STEP per-face material colour.
     private CanonicalMesh? GetCanonical(string modelId, PcbModel model)
     {
@@ -158,10 +158,6 @@ internal sealed class GltfComponentPlacer(
             var normals = new List<Vector3>();
             var groups = new Dictionary<string, CanonicalGroup>();
 
-            // The cached mesh is the raw tessellated STEP geometry (in the model's native frame). The
-            // body's Model3DRot — applied per placement in EmitBody — is the absolute orientation and
-            // already includes any axis correction, so PcbModel.RotationX/Y/Z/Dz (the model's stored
-            // default) must NOT be applied here too, or rotated parts get double-rotated onto their side.
             foreach (var (transform, tri) in CollectMeshes(tess, stepModel))
             {
                 int baseIndex = positions.Count;
@@ -236,6 +232,17 @@ internal sealed class GltfComponentPlacer(
         var comp = doc.Components[body.ComponentIndex];
         if (comp.Layer == 32) return true;                       // placed on the Bottom layer
         return comp is PcbComponent pc && pc.FlippedOnLayer;     // mirrored to the bottom side
+    }
+
+    // StandoffHeight and OverallHeight are signed Z endpoints, not unsigned dimensions. Some Altium
+    // footprints already carry a bottom-facing pose (both endpoints, or their midpoint, are below
+    // zero); others keep a top-facing pose and rely on the placed component side to flip it. Mirroring
+    // only when these two signals disagree preserves both authoring styles.
+    internal static bool NeedsBoardPlaneMirror(PcbComponentBody body, bool componentBottom)
+    {
+        double poseMidZ = (body.StandoffHeight.ToMm() + body.OverallHeight.ToMm()) * 0.5;
+        bool poseBottom = poseMidZ < 0;
+        return poseBottom != componentBottom;
     }
 
     private string ComponentName(PcbComponentBody body)

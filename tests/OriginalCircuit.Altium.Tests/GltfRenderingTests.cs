@@ -1,7 +1,9 @@
+using System.Numerics;
 using System.Text;
 using OriginalCircuit.Altium;
 using OriginalCircuit.Altium.Models.Pcb;
 using OriginalCircuit.Altium.Rendering.Gltf;
+using OriginalCircuit.Mech.GLTF;
 
 namespace OriginalCircuit.Altium.Tests;
 
@@ -25,6 +27,49 @@ public class GltfRenderingTests
     {
         int jsonLength = BitConverter.ToInt32(glb, 12); // chunk-0 length follows the 12-byte header
         return Encoding.UTF8.GetString(glb, 20, jsonLength);
+    }
+
+    private static Vector3[] ComponentPositions(GltfDocument gltf, string modelName)
+    {
+        var nodes = gltf.Root.Nodes!
+            .Where(node => node.Mesh is not null && node.Extras?["model"]?.GetValue<string>() == modelName)
+            .ToArray();
+        Assert.NotEmpty(nodes);
+
+        return nodes
+            .SelectMany(node => gltf.Root.Meshes![node.Mesh!.Value].Primitives)
+            .SelectMany(primitive => AccessorReader.ReadVector3(gltf, primitive.Attributes["POSITION"]))
+            .ToArray();
+    }
+
+    private static (Vector3 Min, Vector3 Max) Bounds(IReadOnlyCollection<Vector3> positions)
+    {
+        Assert.NotEmpty(positions);
+        return (
+            new Vector3(positions.Min(p => p.X), positions.Min(p => p.Y), positions.Min(p => p.Z)),
+            new Vector3(positions.Max(p => p.X), positions.Max(p => p.Y), positions.Max(p => p.Z)));
+    }
+
+    [Theory]
+    [InlineData(0.0, 1.0, false, false)]
+    [InlineData(0.0, 1.0, true, true)]
+    [InlineData(-2.0, -1.0, false, true)]
+    [InlineData(-2.0, -1.0, true, false)]
+    [InlineData(-1.0, 3.0, true, true)]
+    [InlineData(-3.0, 1.0, true, false)]
+    public void NeedsBoardPlaneMirror_MirrorsOnlyWhenPoseAndComponentSideDisagree(
+        double standoffMm,
+        double overallMm,
+        bool componentBottom,
+        bool expected)
+    {
+        var body = new PcbComponentBody
+        {
+            StandoffHeight = OriginalCircuit.Eda.Primitives.Coord.FromMm(standoffMm),
+            OverallHeight = OriginalCircuit.Eda.Primitives.Coord.FromMm(overallMm),
+        };
+
+        Assert.Equal(expected, GltfComponentPlacer.NeedsBoardPlaneMirror(body, componentBottom));
     }
 
     [SkippableTheory]
@@ -84,6 +129,22 @@ public class GltfRenderingTests
         string json = ExtractGlbJson(ms.ToArray());
         Assert.Contains("\"Substrate\"", json);
         Assert.DoesNotContain("\"Components\"", json);
+    }
+
+    [SkippableFact]
+    public async Task BuildDocument_ComponentAssembly_UsesRelationshipDirection()
+    {
+        var path = Path.Combine(GetTestDataPath(), "MAX5719 Breakout.PcbDoc");
+        Skip.IfNot(File.Exists(path), "Test data not available");
+        var doc = (PcbDocument)await AltiumLibrary.OpenPcbDocAsync(path);
+
+        var gltf = new GltfRenderer().BuildDocument(doc);
+        var (min, max) = Bounds(ComponentPositions(gltf, "FCI 06-381 2Pos.STEP"));
+        Vector3 size = max - min;
+
+        Assert.True(Math.Max(size.X, size.Y) < 15,
+            $"FCI assembly subparts are separated; size={size.X:F3} x {size.Y:F3} x {size.Z:F3} mm.");
+        Assert.InRange(size.Z, 11.0f, 11.3f);
     }
 
     [SkippableFact]
